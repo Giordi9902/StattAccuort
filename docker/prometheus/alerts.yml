@@ -1,0 +1,34 @@
+# Shown under Alerts in the Prometheus UI. To be notified, add an Alertmanager (or point Grafana
+# alerting at this Prometheus).
+groups:
+    - name: api
+      rules:
+          - alert: ApiReplicaDown
+            expr: up{job="api"} == 0
+            for: 2m
+            annotations:
+                summary: 'API replica {{ $labels.instance }} has not answered a scrape for 2 minutes'
+
+          - alert: ApiServerErrors
+            expr: sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.02
+            for: 10m
+            annotations:
+                summary: 'More than 2% of API requests fail with a 5xx'
+
+          - alert: ApiSlow
+            expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m]))) > 1
+            for: 10m
+            annotations:
+                summary: 'API p95 latency above 1 s'
+
+          - alert: ApiEventLoopBlocked
+            expr: max by (instance_id) (nodejs_eventloop_lag_p99_seconds) > 0.2
+            for: 5m
+            annotations:
+                summary: 'Event loop lag p99 above 200 ms on {{ $labels.instance_id }}: the replica is CPU-bound, scale out'
+
+          - alert: ReportsRateLimitedSpike
+            expr: sum(rate(reports_submitted_total{outcome="rate_limited"}[15m])) > 0.2
+            for: 15m
+            annotations:
+                summary: 'Many rate-limited report submissions: possible flooding'

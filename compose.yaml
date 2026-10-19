@@ -1,0 +1,87 @@
+# The whole stack: `docker compose up -d --build`, then once `docker compose run --rm api setup`.
+# Settings come from .env (see .env.example). The app is served on PUBLIC_URL.
+name: stattaccuort
+
+services:
+    postgres:
+        image: postgres:18.0-alpine3.22
+        environment:
+            POSTGRES_DB: stattaccuort
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+        volumes:
+            - postgres_data:/var/lib/postgresql
+        healthcheck:
+            test: ['CMD-SHELL', 'pg_isready -U postgres']
+            interval: 5s
+            timeout: 5s
+            retries: 10
+        restart: unless-stopped
+
+    api:
+        build:
+            context: .
+            dockerfile: packages/api-worker/Dockerfile
+        environment:
+            DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/stattaccuort
+            CORS_ORIGINS: ${PUBLIC_URL:-http://localhost:8080}
+            REPORT_HASH_SECRET: ${REPORT_HASH_SECRET:?set REPORT_HASH_SECRET in .env}
+            REPORT_COOLDOWN_SECONDS: ${REPORT_COOLDOWN_SECONDS:-600}
+            TRUST_PROXY: 'true'
+            LOG_LEVEL: ${LOG_LEVEL:-info}
+            # Empty disables the admin dashboard API (503).
+            ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+            # Per replica: API_REPLICAS × DATABASE_POOL_MAX must stay below Postgres max_connections.
+            DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+            SHUTDOWN_DRAIN_SECONDS: ${SHUTDOWN_DRAIN_SECONDS:-0}
+        # Stateless replicas behind Caddy; scale with API_REPLICAS or `docker compose up --scale api=N`.
+        deploy:
+            replicas: ${API_REPLICAS:-1}
+        stop_grace_period: 30s
+        depends_on:
+            postgres:
+                condition: service_healthy
+        healthcheck:
+            test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8787/readyz > /dev/null']
+            interval: 10s
+            timeout: 5s
+            retries: 6
+            start_period: 20s
+        restart: unless-stopped
+
+    web:
+        build:
+            context: .
+            dockerfile: docker/web/Dockerfile
+            args:
+                PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+        environment:
+            PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+        volumes:
+            # Built with `bun run generate` in packages/tile-server.
+            - ./packages/tile-server/dist:/tiles:ro
+        ports:
+            - '${WEB_PORT:-8080}:80'
+        depends_on:
+            api:
+                condition: service_healthy
+        restart: unless-stopped
+
+    # Optional: `docker compose --profile monitoring up -d`. Scrapes every API replica; UI on
+    # 127.0.0.1:9090 (reach it through an SSH tunnel on the VPS).
+    prometheus:
+        image: prom/prometheus:v3.5.0
+        profiles: [monitoring]
+        command:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-30d}
+        volumes:
+            - ./docker/prometheus:/etc/prometheus:ro
+            - prometheus_data:/prometheus
+        ports:
+            - '127.0.0.1:${PROMETHEUS_PORT:-9090}:9090'
+        restart: unless-stopped
+
+volumes:
+    postgres_data:
+    prometheus_data:
