@@ -1,0 +1,67 @@
+name: API CI
+
+on:
+    pull_request:
+        branches: [main]
+
+jobs:
+    lint:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+
+        steps:
+            - name: Check out code
+              uses: actions/checkout@v4
+
+            - name: Set up Bun
+              uses: oven-sh/setup-bun@v1
+              with:
+                  bun-version: latest
+
+            - name: Install dependencies
+              run: cd packages/api-worker && bun install
+
+            - name: Run ESLint
+              run: cd packages/api-worker && bun run lint
+
+            - name: Run Prettier check
+              run: cd packages/api-worker && bun run format:check
+
+    test:
+        runs-on: ubuntu-latest
+        needs: lint
+        permissions:
+            contents: read
+        services:
+            postgres:
+                image: postgres:18.0-alpine3.22
+                env:
+                    POSTGRES_DB: stattaccuort_test
+                    POSTGRES_USER: postgres
+                    POSTGRES_PASSWORD: postgres
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U postgres"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 10
+        steps:
+            - name: Check out code
+              uses: actions/checkout@v4
+
+            - name: Set up Bun
+              uses: oven-sh/setup-bun@v1
+              with:
+                  bun-version: latest
+
+            - name: Install dependencies
+              run: cd packages/api-worker && bun install
+
+            # tests/global-setup.ts rebuilds the test database (migrations + seed from the bundled
+            # snapshots); the remaining env comes from vitest.config.ts.
+            - name: Run API tests
+              env:
+                  TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/stattaccuort_test
+              run: cd packages/api-worker && bun run test
