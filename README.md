@@ -38,9 +38,9 @@
 ---
 
 <div align="center">
-  <img src="docs/readme_assets/screenshot1.png" alt="Mappa di Statt’Accuort con le segnalazioni" width="250" />
+  <img src="docs/readme_assets/screenshot1.png" alt="Mappa di Napoli con le linee e le segnalazioni attive" width="250" />
   &nbsp;&nbsp;&nbsp;
-  <img src="docs/readme_assets/screenshot2.png" alt="Panoramica della rete di Napoli" width="250" />
+  <img src="docs/readme_assets/screenshot2.png" alt="Mappa del rischio per tratta a Napoli" width="250" />
 </div>
 
 ## 👀 Che cos’è
