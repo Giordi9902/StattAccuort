@@ -1,0 +1,27 @@
+.DS_Store
+packages/tile-server/source/*
+!packages/tile-server/source/stattaccuort-style.json
+packages/tile-server/dist/
+settings.json
+*.log
+*.tsbuildinfo
+.env
+__pycache__
+packages/*.log.*
+packages/frontend/dist/
+data/*
+scripts/segments.geojson
+scripts/stations.json
+scripts/lines.json
+scripts/export.geojson
+scripts/Pipfile
+scripts/Pipfile.lock
+messages.*.json
+eval_results.*.json
+extract.*.jsonl
+
+# Agent worktrees are local scratch, not project state.
+.claude/worktrees/
+
+# Agent-local security analysis is shared out of band.
+.claude/skills/report-spam/

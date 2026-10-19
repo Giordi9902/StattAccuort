@@ -1,0 +1,9 @@
+.git
+**/node_modules
+**/.env
+**/dist
+**/.wrangler
+**/*.log
+packages/tile-server/source
+packages/frontend-next/ios
+packages/frontend-next/e2e
