@@ -1,0 +1,17 @@
+# deps
+node_modules/
+.cache/
+
+# env
+.env
+
+# wrangler
+.dev.vars
+.wrangler/
+# generated per PR by scripts/preview-databases.ts
+wrangler.preview.json
+
+# local libsql/sqlite db files (tests, seed, drizzle-kit)
+*.db
+*.db-wal
+*.db-shm
