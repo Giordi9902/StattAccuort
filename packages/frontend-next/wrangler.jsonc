@@ -1,0 +1,31 @@
+{
+  "name": "frontend",
+  "compatibility_date": "2026-05-31",
+  "main": "./worker/index.ts",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // HTML needs to pass through the Worker so it can set the host-specific canonical and Open
+    // Graph tags. Keep Vite's hashed bundle files on Cloudflare's direct asset path.
+    "run_worker_first": [
+      "/*",
+      "!/assets/*",
+      "!/favicon*",
+      "!/icons.svg",
+      "!/manifest.webmanifest",
+      "!/og-image.jpg",
+      "!/profiles/*",
+      "!/pwa-*",
+      "!/robots.txt",
+      "!/sw.js",
+      "!/workbox-*.js",
+    ],
+  },
+  // app.stattaccuort.it resolves to the default city (PWA install + Capacitor origin + App Store
+  // deep-link target); each city hostname serves the same bundle and resolves its city at runtime.
+  "routes": [
+    { "pattern": "app.stattaccuort.it", "custom_domain": true },
+    { "pattern": "napoli.stattaccuort.it", "custom_domain": true },
+  ],
+}
