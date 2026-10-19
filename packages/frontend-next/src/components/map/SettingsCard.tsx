@@ -1,0 +1,114 @@
+import { Link } from '@tanstack/react-router';
+import { ChevronRight, Mail, MessageSquarePlus, TicketCheck } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+
+import { CardContent } from '@/components/ui/card';
+import { SectionHeading } from '@/components/ui/section-heading';
+import { Separator } from '@/components/ui/separator';
+import { openConsentSettings } from '@/lib/consent';
+import { openFeedbackModal } from '@/lib/feedback-modal';
+import { openLegalDisclaimer } from '@/lib/legal-disclaimer';
+import { Route as ImpressumRoute } from '@/routes/impressum';
+import { Route as PrivacyRoute } from '@/routes/privacy';
+
+import { CitySwitcher } from './CitySwitcher';
+import { DetailCard } from './DetailCard';
+import { LanguageSwitcher } from './LanguageSwitcher';
+import { NAMESPACE } from './SettingsButton.i18n';
+import { SocialLinks } from './SocialLinks';
+
+const WEBSITE_URL = 'https://stattaccuort.it';
+
+function LegalLink({
+  to,
+  onClick,
+  children,
+}: {
+  to?: typeof ImpressumRoute.to | typeof PrivacyRoute.to;
+  onClick?: () => void;
+  children: React.ReactNode;
+}) {
+  if (to) {
+    return (
+      <Link
+        to={to}
+        preload={false}
+        className="text-muted-foreground hover:text-foreground text-xs underline"
+      >
+        {children}
+      </Link>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="text-muted-foreground hover:text-foreground text-xs underline"
+    >
+      {children}
+    </button>
+  );
+}
+
+type SettingsCardProps = {
+  onClose: () => void;
+};
+
+export function SettingsCard({ onClose }: SettingsCardProps) {
+  const { t } = useTranslation(NAMESPACE);
+
+  return (
+    <DetailCard title={t('title')} closeLabel={t('close')} onClose={onClose}>
+      <CardContent>
+        <div className="bg-muted/60 text-muted-foreground flex items-center gap-2 rounded-md px-3 py-2 text-xs">
+          <TicketCheck className="text-accent-bright size-4 shrink-0" />
+          <p>{t('ticketReminder')}</p>
+        </div>
+      </CardContent>
+
+      <div className="flex flex-col px-2">
+        <LanguageSwitcher />
+        <CitySwitcher />
+        <a
+          href={`${WEBSITE_URL}/contact`}
+          className="hover:bg-muted focus-visible:bg-muted flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors outline-none"
+        >
+          <Mail className="text-muted-foreground size-4" />
+          <span>{t('contact')}</span>
+          <ChevronRight className="text-muted-foreground ml-auto size-4" />
+        </a>
+        <button
+          type="button"
+          onClick={() => openFeedbackModal('settings')}
+          className="hover:bg-muted focus-visible:bg-muted flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors outline-none"
+        >
+          <MessageSquarePlus className="text-muted-foreground size-4" />
+          <span>{t('feedback')}</span>
+          <ChevronRight className="text-muted-foreground ml-auto size-4" />
+        </button>
+      </div>
+
+      <CardContent className="flex flex-col gap-2">
+        <SectionHeading className="text-muted-foreground">{t('follow')}</SectionHeading>
+        <SocialLinks appearance="inline" className="-ml-2" />
+      </CardContent>
+
+      <Separator className="my-1" />
+
+      <CardContent className="flex flex-wrap gap-x-4 gap-y-1">
+        <a
+          href={WEBSITE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-muted-foreground hover:text-foreground text-xs underline"
+        >
+          {t('association')}
+        </a>
+        <LegalLink to={ImpressumRoute.to}>{t('imprint')}</LegalLink>
+        <LegalLink to={PrivacyRoute.to}>{t('privacy')}</LegalLink>
+        <LegalLink onClick={openLegalDisclaimer}>{t('terms')}</LegalLink>
+        <LegalLink onClick={openConsentSettings}>{t('analytics')}</LegalLink>
+      </CardContent>
+    </DetailCard>
+  );
+}

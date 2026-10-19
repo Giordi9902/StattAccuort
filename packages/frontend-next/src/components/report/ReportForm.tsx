@@ -1,0 +1,506 @@
+import { getRouteApi, useNavigate } from '@tanstack/react-router';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import type { TFunction } from 'i18next';
+import { ChevronRight, MapPin, Search, Send, TriangleAlert } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+
+import { SubmitReportError, type SubmitReportResponse, useSubmitReport } from '@/api/reports';
+import { type Station } from '@/api/transit';
+import type { ReportKind } from '@/routes/report';
+import { FeedbackButton } from '@/components/feedback/FeedbackButton';
+import { ReportLocationStep } from '@/components/map/UserLocationControl';
+import { PageHeader } from '@/components/templates/PageHeader';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { SectionHeading } from '@/components/ui/section-heading';
+import { Separator } from '@/components/ui/separator';
+import { ToastPill } from '@/components/ui/toast-pill';
+import { Toaster } from '@/components/ui/toaster';
+import { useGeolocation } from '@/contexts/Geolocation.context';
+import { track } from '@/lib/analytics';
+import { currentCity } from '@/lib/city';
+import { captureIssue } from '@/lib/error-monitoring';
+import { distanceMeters } from '@/lib/geo';
+import { notifySuccess } from '@/lib/haptics';
+import { toast } from '@/lib/toast';
+import { cn } from '@/lib/utils';
+
+import { IncidentFormBody } from './incident-form-body';
+import { ReportKindPicker } from './report-kind-picker';
+import { NAMESPACE } from './ReportForm.i18n';
+import { useReportSelection } from './ReportSelection.context';
+import { ReportSelectionProvider } from './ReportSelectionProvider';
+import { ReportSuccess } from './ReportSuccess';
+import { ClearSelectionButton, LineBadgePicker, LineTypeTabs } from './line-picker-controls';
+import { SelectionButton } from './selection-button';
+import { type ReportRejection, useReportVerification } from './useReportVerification';
+
+const routeApi = getRouteApi('/report');
+
+/** Diacritic-insensitive match so "universita" finds "Università". */
+function normalize(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/ß/g, 'ss')
+    .toLowerCase();
+}
+
+const NEARBY_COUNT = 3;
+
+// Long enough to read a sentence with a number in it; the default 4 s was easy to miss.
+const REJECTION_TOAST_MS = 8_000;
+
+function formatDistance(meters: number, lang: string): string {
+  const km = meters / 1000;
+  return new Intl.NumberFormat(lang, {
+    style: 'unit',
+    unit: 'kilometer',
+    maximumFractionDigits: km < 10 ? 1 : 0,
+  }).format(km);
+}
+
+function rejectionMessage(
+  rejection: ReportRejection,
+  t: TFunction<typeof NAMESPACE>,
+  lang: string,
+) {
+  return rejection.reason === 'too_far'
+    ? t('errorTooFar', { distance: formatDistance(rejection.distanceMeters, lang) })
+    : t('errorTooSoon', { count: rejection.waitMinutes });
+}
+
+function LinePicker() {
+  const { t } = useTranslation(NAMESPACE);
+  const { lineName, lineFilter, setLineFilter, selectLine, visibleLines, stationId } =
+    useReportSelection();
+
+  return (
+    <section className="px-4">
+      {/* Stacked on phones: with enough route types the filters need ~420px
+          beside the heading, so sharing a row cuts off the last one. */}
+      <div className="mb-3 flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <SectionHeading hint={t('optional')}>{t('line')}</SectionHeading>
+        <LineTypeTabs value={lineFilter} onChange={setLineFilter} />
+      </div>
+
+      {lineName && (
+        <div className="mb-1 flex justify-end">
+          <ClearSelectionButton onClick={() => selectLine(null)} />
+        </div>
+      )}
+
+      <LineBadgePicker
+        lines={visibleLines}
+        selectedLine={lineName}
+        onSelect={selectLine}
+        wrap={Boolean(stationId)}
+      />
+    </section>
+  );
+}
+
+function StationPicker({ required = true }: { required?: boolean }) {
+  const { t } = useTranslation(NAMESPACE);
+  const { stationId, lineName, selectStation, visibleStations } = useReportSelection();
+  const { position } = useGeolocation();
+  const [query, setQuery] = useState('');
+
+  const needle = normalize(query.trim());
+  const filtered = needle
+    ? visibleStations.filter((s) => normalize(s.name).includes(needle))
+    : visibleStations;
+
+  // Closest stations, only while sharing location, not searching, and not browsing a line.
+  const nearby =
+    position && !needle && !lineName
+      ? visibleStations
+          .map((station) => ({
+            station,
+            distance: distanceMeters(
+              position.lat,
+              position.lng,
+              station.coordinates.latitude,
+              station.coordinates.longitude,
+            ),
+          }))
+          .sort((a, b) => a.distance - b.distance)
+          .slice(0, NEARBY_COUNT)
+          .map((n) => n.station)
+      : [];
+  const nearbyIds = new Set(nearby.map((s) => s.id));
+  const rest = filtered.filter((s) => !nearbyIds.has(s.id));
+
+  // The full station list is hundreds of rows. Virtualize it so only the visible rows mount.
+  // `nearby` (≤3) renders in normal flow above the list, so scrollMargin offsets the virtualizer
+  // past it (the scroll container is `relative` so listRef.offsetTop is measured against it).
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const virtualizer = useVirtualizer({
+    count: rest.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 45,
+    overscan: 10,
+    scrollMargin: listRef.current?.offsetTop ?? 0,
+  });
+
+  const clear = () => {
+    selectStation(null);
+    setQuery('');
+  };
+
+  const renderStationButton = (id: string, name?: string) => (
+    <SelectionButton
+      value={id}
+      selectedValue={stationId}
+      onSelect={(nextId) => (nextId === null ? clear() : selectStation(nextId))}
+      className="hover:bg-muted focus-visible:bg-muted flex w-full items-center rounded-md px-3 py-2.5 text-left text-sm"
+      selectedClassName="bg-muted"
+    >
+      <span className="truncate">{name}</span>
+    </SelectionButton>
+  );
+
+  const renderStation = (station: Station) => (
+    <li key={station.id} className="border-border/60 border-b last:border-b-0">
+      {renderStationButton(station.id, station.name)}
+    </li>
+  );
+
+  return (
+    <section className={cn('mt-6 flex flex-col px-4', !stationId && 'min-h-0 flex-1')}>
+      <div className="mb-3 flex items-center justify-between">
+        <SectionHeading
+          hint={required ? t('required') : t('optional')}
+          hintTone={required ? 'destructive' : 'muted'}
+        >
+          {t('station')}
+        </SectionHeading>
+        {stationId && <ClearSelectionButton onClick={clear} />}
+      </div>
+
+      {stationId ? (
+        renderStationButton(stationId, visibleStations[0]?.name)
+      ) : (
+        <>
+          <div className="relative mb-2">
+            <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t('searchStation')}
+              className="h-10 pl-9 text-base"
+              autoComplete="off"
+            />
+          </div>
+          <div
+            ref={scrollRef}
+            className="relative min-h-0 flex-1 overflow-y-auto mask-b-from-[calc(100%-2.5rem)] mask-b-to-100% pb-2"
+          >
+            {nearby.length > 0 && (
+              <>
+                <div className="text-muted-foreground flex items-center gap-1.5 px-3 py-2 text-[0.625rem] font-semibold tracking-wide uppercase">
+                  <MapPin className="size-3.5" />
+                  {t('nearby')}
+                </div>
+                <ul>{nearby.map(renderStation)}</ul>
+                {rest.length > 0 && <Separator className="bg-border my-2 data-horizontal:h-0.5" />}
+              </>
+            )}
+            {needle && filtered.length === 0 ? (
+              <p className="text-muted-foreground px-3 py-6 text-center text-sm">
+                {t('noMatch', { query })}
+              </p>
+            ) : (
+              <ul
+                ref={listRef}
+                style={{ height: virtualizer.getTotalSize(), position: 'relative' }}
+              >
+                {virtualizer.getVirtualItems().map((virtualRow) => {
+                  const station = rest[virtualRow.index];
+                  return (
+                    <li
+                      key={station.id}
+                      ref={virtualizer.measureElement}
+                      data-index={virtualRow.index}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`,
+                      }}
+                      className="border-border/60 border-b"
+                    >
+                      {renderStationButton(station.id, station.name)}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function DirectionPicker() {
+  const { t } = useTranslation(NAMESPACE);
+  const { directionStationId, selectDirection, directionOptions } = useReportSelection();
+
+  if (directionOptions.length === 0) return null;
+
+  return (
+    <section className="mt-6 px-4">
+      <div className="mb-3 flex items-center justify-between">
+        <SectionHeading hint={t('optional')}>{t('direction')}</SectionHeading>
+        {/* Rendered unconditionally and hidden when nothing is selected to reserve its height. */}
+        <ClearSelectionButton
+          onClick={() => selectDirection(null)}
+          className={cn(!directionStationId && 'invisible')}
+        />
+      </div>
+      <ul>
+        {directionOptions.map((station) => (
+          <li key={station.id} className="border-border/60 border-b last:border-b-0">
+            <SelectionButton
+              value={station.id}
+              selectedValue={directionStationId}
+              onSelect={selectDirection}
+              className="hover:bg-muted focus-visible:bg-muted flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm transition-opacity"
+              selectedClassName="bg-muted"
+            >
+              <ChevronRight className="text-muted-foreground size-5 shrink-0" />
+              <span className="truncate">{station.name}</span>
+            </SelectionButton>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function SubmitFailureNotice({ title, body }: { title: string; body: string }) {
+  const { t } = useTranslation(NAMESPACE);
+  const telegramHandle = currentCity.community.telegramHandle;
+  const telegramUrl = telegramHandle
+    ? `https://t.me/${telegramHandle.replace(/^@/, '')}`
+    : undefined;
+
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+      <TriangleAlert className="text-muted-foreground size-8" />
+      <div className="space-y-2">
+        <p className="font-heading text-base font-semibold">{title}</p>
+        <p className="text-muted-foreground text-sm">{body}</p>
+      </div>
+      {telegramUrl && (
+        <Button
+          asChild
+          size="lg"
+          className="bg-accent-bright text-primary-foreground hover:bg-accent-press h-12 rounded-lg px-6 text-base font-semibold shadow-[0_6px_16px_rgba(214,59,59,0.28)]"
+        >
+          <a href={telegramUrl} target="_blank" rel="noopener noreferrer">
+            <Send data-icon="inline-start" />
+            {t('telegramFallbackCta')}
+          </a>
+        </Button>
+      )}
+    </div>
+  );
+}
+
+const REPEATED_FAILURE_THRESHOLD = 3;
+
+function SubmitFooter({
+  onSubmitted,
+  onSubmissionError,
+  onRepeatedFailure,
+}: {
+  onSubmitted: (result: SubmitReportResponse) => void;
+  onSubmissionError: () => void;
+  onRepeatedFailure: () => void;
+}) {
+  const { t, i18n } = useTranslation(NAMESPACE);
+  const { stationId, lineName, directionStationId } = useReportSelection();
+  const submitReport = useSubmitReport();
+  const { verify, recordSubmission } = useReportVerification();
+  const [consecutiveFailures, setConsecutiveFailures] = useState(0);
+
+  const canSubmit = stationId !== null;
+
+  const handleSubmit = () => {
+    /*
+     * The button reads as disabled but stays clickable (aria-disabled, not disabled), because a
+     * truly disabled button swallows the tap and a user who has not noticed the station picker
+     * gets no feedback at all. Tell them what is missing instead.
+     */
+    if (stationId === null) {
+      toast.custom(
+        () => (
+          <ToastPill className="bg-destructive flex w-fit items-center gap-2 text-sm font-semibold text-white">
+            <TriangleAlert className="size-4" />
+            {t('errorNoStation')}
+          </ToastPill>
+        ),
+        { id: 'report-station-required' },
+      );
+      return;
+    }
+    const rejection = verify(stationId);
+    if (rejection) {
+      track('report_rejected', { reason: rejection.reason, stationId });
+      toast.custom(
+        () => (
+          <ToastPill className="bg-destructive flex w-fit max-w-[calc(100vw-2rem)] items-center gap-2 rounded-2xl text-sm font-semibold text-white">
+            <TriangleAlert className="size-4 shrink-0" />
+            {rejectionMessage(rejection, t, i18n.language)}
+          </ToastPill>
+        ),
+        { id: 'report-verification', duration: REJECTION_TOAST_MS },
+      );
+      return;
+    }
+    submitReport.mutate({
+      stationId,
+      lineName,
+      directionStationId,
+      onOptimistic: (result) => {
+        setConsecutiveFailures(0);
+        notifySuccess();
+        recordSubmission();
+        track('report_submitted', {
+          stationId: result.stationId,
+          lineId: result.lineId,
+          directionId: result.directionId,
+        });
+        onSubmitted(result);
+      },
+      onSubmissionError: (error) => {
+        onSubmissionError();
+        /*
+         * Every other failure (network error, an edge block before the token is even checked,
+         * an unexpected 5xx, …) must still tell the user something happened — otherwise the
+         * button just re-enables silently and a tap that produced no report reads as tapping
+         * nothing at all.
+         */
+        captureIssue('Report submit failed', {
+          status: error instanceof SubmitReportError ? error.status : undefined,
+        });
+        const failureCount = consecutiveFailures + 1;
+        setConsecutiveFailures(failureCount);
+        if (failureCount >= REPEATED_FAILURE_THRESHOLD) {
+          onRepeatedFailure();
+          return;
+        }
+        toast.custom(
+          () => (
+            <ToastPill className="bg-destructive flex w-fit items-center gap-2 text-sm font-semibold text-white">
+              <TriangleAlert className="size-4" />
+              {t('errorSubmitFailed')}
+            </ToastPill>
+          ),
+          { id: 'report-submit-error' },
+        );
+      },
+    });
+  };
+
+  return (
+    <footer className="pb-safe-4 mt-auto px-4 pt-6">
+      <Button
+        type="button"
+        size="lg"
+        disabled={submitReport.isPending}
+        aria-disabled={!canSubmit}
+        onClick={handleSubmit}
+        className={cn(
+          'h-12 w-full rounded-lg text-base font-semibold',
+          canSubmit
+            ? 'bg-accent-bright text-primary-foreground hover:bg-accent-press shadow-[0_6px_16px_rgba(214,59,59,0.28)]'
+            : 'bg-surface-solid text-muted-foreground border-border border',
+        )}
+      >
+        {t('submit')}
+      </Button>
+      <p className="text-muted-foreground mt-2 text-center text-[0.6875rem]">{t('disclaimer')}</p>
+    </footer>
+  );
+}
+
+export function ReportForm() {
+  const { t } = useTranslation(NAMESPACE);
+  const navigate = useNavigate();
+  const {
+    stationId: initialStationId,
+    lineName: initialLineName,
+    kind: initialKind,
+  } = routeApi.useSearch();
+  const [kind, setKind] = useState<ReportKind>(initialKind ?? 'inspection');
+  const [result, setResult] = useState<SubmitReportResponse | null>(null);
+  const [repeatedFailure, setRepeatedFailure] = useState(false);
+
+  const handleSuccessClose = () => {
+    navigate({ to: '/' });
+  };
+
+  return (
+    <ReportSelectionProvider initialStationId={initialStationId} initialLineName={initialLineName}>
+      <div className="bg-card animate-in fade-in fixed inset-0 z-30 duration-150">
+        <div className="mx-auto flex h-full w-full max-w-md flex-col pb-(--keyboard-inset)">
+          {result ? (
+            <ReportSuccess result={result} onClose={handleSuccessClose} />
+          ) : (
+            <>
+              <PageHeader
+                title={kind === 'inspection' ? t('title') : t('titleIncident')}
+                onBack={() => navigate({ to: '/' })}
+                action={
+                  <FeedbackButton
+                    source="report_form"
+                    size="xs"
+                    className="text-muted-foreground hover:text-foreground"
+                  />
+                }
+              />
+              {!repeatedFailure ? (
+                <ReportLocationStep>
+                  <ReportKindPicker value={kind} onChange={setKind} />
+                  {kind === 'inspection' ? (
+                    <>
+                      <LinePicker />
+                      <StationPicker />
+                      <DirectionPicker />
+                      <SubmitFooter
+                        onSubmitted={setResult}
+                        onSubmissionError={() => setResult(null)}
+                        onRepeatedFailure={() => setRepeatedFailure(true)}
+                      />
+                    </>
+                  ) : (
+                    <IncidentFormBody
+                      kind={kind}
+                      onSubmitted={() => navigate({ to: '/' })}
+                      renderPlacePickers={(lineSelected) => (
+                        <>
+                          <LinePicker />
+                          <StationPicker required={!lineSelected} />
+                        </>
+                      )}
+                    />
+                  )}
+                </ReportLocationStep>
+              ) : (
+                <SubmitFailureNotice title={t('submitFailedTitle')} body={t('submitFailedBody')} />
+              )}
+            </>
+          )}
+        </div>
+        {/* /report is outside the _map layout that hosts the app's Toaster, so mount one here. */}
+        <Toaster />
+      </div>
+    </ReportSelectionProvider>
+  );
+}
