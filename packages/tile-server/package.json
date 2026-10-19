@@ -1,0 +1,15 @@
+{
+  "name": "tile-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "generate": "bun scripts/generate.ts",
+    "serve": "bun styles/serve.ts dist 3000"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.10",
+    "typescript": "~6.0.2"
+  }
+}

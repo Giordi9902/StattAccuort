@@ -1,0 +1,69 @@
+{
+  "layers": {
+    "admin": {
+      "minzoom": 0,
+      "maxzoom": 14,
+      "simplify_below": 10,
+      "simplify_level": 0.0005
+    },
+    "aeroway": {
+      "minzoom": 9,
+      "maxzoom": 14
+    },
+    "building": {
+      "minzoom": 13,
+      "maxzoom": 14,
+      "filter_below": 13,
+      "filter_area": 0.00000001
+    },
+    "landuse": {
+      "minzoom": 5,
+      "maxzoom": 14,
+      "filter_below": 8,
+      "filter_area": 0.0000002,
+      "combine_polygons_below": 8,
+      "simplify_below": 12,
+      "simplify_level": 0.00008
+    },
+    "road": {
+      "minzoom": 5,
+      "maxzoom": 14,
+      "simplify_below": 12,
+      "simplify_level": 0.00005,
+      "simplify_ratio": 1.5,
+      "z_order_ascending": true
+    },
+    "structure": {
+      "minzoom": 13,
+      "maxzoom": 14
+    },
+    "water": {
+      "minzoom": 0,
+      "maxzoom": 14,
+      "filter_below": 8,
+      "filter_area": 0.000001,
+      "simplify_below": 13,
+      "simplify_level": 0.0002,
+      "simplify_algorithm": "visvalingam"
+    },
+    "waterway": {
+      "minzoom": 7,
+      "maxzoom": 14,
+      "simplify_below": 13,
+      "simplify_level": 0.0001
+    }
+  },
+  "settings": {
+    "minzoom": 0,
+    "maxzoom": 14,
+    "basezoom": 14,
+    "include_ids": false,
+    "compress": "gzip",
+    "version": "0.1.0",
+    "high_resolution": false,
+    "mvt_version": 2,
+    "metadata": {
+      "attribution": "OpenStreetMap contributors"
+    }
+  }
+}
