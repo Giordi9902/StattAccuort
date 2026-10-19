@@ -1,0 +1,50 @@
+import { useEffect, useSyncExternalStore } from 'react';
+
+import { setSuperProperties, track } from '@/lib/analytics';
+import { safeLocalStorage } from '@/lib/safe-storage';
+
+// Which transit layer the map shows: risk-colored segments ('RISK') or plain line colors
+// ('LINES'). Shared between the toggle button (mounted in the map route) and the layer (nested
+// inside the lazily-loaded map), so it lives in a tiny module store rather than React context —
+// no provider, no prop-drilling across the lazy boundary. Defaults to 'LINES' — with few reports,
+// the risk view paints the whole network one green and hides which line is which — and persists
+// the user's choice under the `defaultLayer` key.
+type Layer = 'RISK' | 'LINES';
+
+const STORAGE_KEY = 'defaultLayer';
+const DEFAULT_LAYER: Layer = 'LINES';
+
+function readInitial(): Layer {
+  const stored = safeLocalStorage.getItem(STORAGE_KEY);
+  return stored === 'RISK' || stored === 'LINES' ? stored : DEFAULT_LAYER;
+}
+
+let layer = readInitial();
+const listeners = new Set<() => void>();
+
+function setLayer(next: Layer) {
+  if (next === layer) return;
+  layer = next;
+  safeLocalStorage.setItem(STORAGE_KEY, next);
+  track('risk_layer_toggled', { to: next });
+  setSuperProperties({ map_layer: next });
+  for (const listener of listeners) listener();
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+export function useRiskLayer(): { visible: boolean; toggle: () => void } {
+  const current = useSyncExternalStore(subscribe, () => layer);
+  // Stamp the current layer as a super property once PostHog is initialized (it isn't yet at module
+  // load), so events fired before any toggle — pageviews, reports — still carry the default state.
+  useEffect(() => {
+    setSuperProperties({ map_layer: current });
+  }, [current]);
+  return {
+    visible: current === 'RISK',
+    toggle: () => setLayer(layer === 'RISK' ? 'LINES' : 'RISK'),
+  };
+}

@@ -1,0 +1,135 @@
+import type { StyleSpecification } from 'maplibre-gl';
+import { createStore, del, get, keys, set } from 'idb-keyval';
+import { PMTiles, type Protocol, type RangeResponse, type Source } from 'pmtiles';
+
+// Capacitor-only offline basemap. The native build ships no service worker, so the web app's
+// HTTP-cache offline path doesn't apply; instead we persist the full PMTiles archive in IndexedDB
+// and read tiles from it locally. IndexedDB (not the Filesystem plugin) holds the ~25 MB archive as
+// a Blob with no base64 round-trip and survives WebView cold starts. Imported only behind
+// `__CAPACITOR__`, so it never enters the web bundle.
+
+const store = createStore('stattaccuort-basemap', 'cache');
+const STYLE_KEY = 'style';
+const ARCHIVE_PREFIX = 'archive:';
+
+/** A pmtiles Source that reads only the requested range from the persisted archive. */
+class BlobSource implements Source {
+  private readonly blob: Blob;
+  private readonly key: string;
+
+  constructor(blob: Blob, key: string) {
+    this.blob = blob;
+    this.key = key;
+  }
+
+  getKey(): string {
+    return this.key;
+  }
+
+  async getBytes(offset: number, length: number): Promise<RangeResponse> {
+    return { data: await this.blob.slice(offset, offset + length).arrayBuffer() };
+  }
+}
+
+// The immutable `/v<sha>/` segment makes each deploy's archive a stable cache key.
+function archiveKeyFor(archiveUrl: string): string {
+  return `${ARCHIVE_PREFIX}${archiveUrl}`;
+}
+
+function styleKeyFor(styleUrl: string): string {
+  return `${STYLE_KEY}:${styleUrl}`;
+}
+
+function archiveBasename(archiveUrl: string): string {
+  const parts = archiveUrl.split('/');
+  return parts[parts.length - 1] ?? archiveUrl;
+}
+
+function archiveUrlFromStyle(style: StyleSpecification): string | null {
+  const source = style.sources?.stattaccuort;
+  if (source && source.type === 'vector' && typeof source.url === 'string') {
+    return source.url.replace('pmtiles://', '');
+  }
+  return null;
+}
+
+// Fetch the style fresh and persist it; fall back to the last cached copy when offline.
+// Network fetch only — persistence is deferred to prepareOfflineBasemap, which pairs the saved style
+// with a confirmed-present archive.
+async function fetchStyle(styleUrl: string): Promise<StyleSpecification | null> {
+  try {
+    const res = await fetch(styleUrl);
+    if (!res.ok) throw new Error(`style HTTP ${res.status}`);
+    return (await res.json()) as StyleSpecification;
+  } catch {
+    return null;
+  }
+}
+
+// Drop archives from older deploys so storage tracks only the current version.
+async function pruneOldArchives(keepUrl: string): Promise<void> {
+  const keepKey = archiveKeyFor(keepUrl);
+  const keepName = archiveBasename(keepUrl);
+  const all = await keys(store);
+  await Promise.all(
+    all
+      .filter((k): k is string => {
+        if (typeof k !== 'string' || !k.startsWith(ARCHIVE_PREFIX) || k === keepKey) return false;
+        const rest = k.slice(ARCHIVE_PREFIX.length);
+        if (!rest.includes('/')) return true;
+        return archiveBasename(rest) === keepName;
+      })
+      .map((k) => del(k, store)),
+  );
+}
+
+async function downloadArchive(archiveUrl: string, key: string): Promise<void> {
+  const res = await fetch(archiveUrl);
+  if (!res.ok) throw new Error(`archive HTTP ${res.status}`);
+  await set(key, await res.blob(), store);
+}
+
+/**
+ * Resolve the basemap style and, when a local copy of its PMTiles archive exists, register it with
+ * the pmtiles protocol so tiles render with no network. A new deploy's archive is downloaded once in
+ * the background — this launch still uses the network via the protocol's default FetchSource — and
+ * reused on every later launch, including offline ones. Returns the original URL only as a last
+ * resort: a first-ever launch while offline, when nothing is cached yet.
+ */
+export async function prepareOfflineBasemap(
+  styleUrl: string,
+  protocol: Protocol,
+): Promise<string | StyleSpecification> {
+  // Prefer the fresh style; fall back to the last persisted one (which always has its archive) offline.
+  const fresh = await fetchStyle(styleUrl);
+  const style = fresh ?? (await get<StyleSpecification>(styleKeyFor(styleUrl), store)) ?? null;
+  if (!style) return styleUrl;
+
+  const persistStyle = async (value: StyleSpecification) => {
+    await set(styleKeyFor(styleUrl), value, store);
+    await del(STYLE_KEY, store);
+  };
+
+  const archiveUrl = archiveUrlFromStyle(style);
+  if (!archiveUrl) {
+    if (fresh) await persistStyle(fresh);
+    return style;
+  }
+
+  const key = archiveKeyFor(archiveUrl);
+  const cached = await get<Blob>(key, store);
+  if (cached) {
+    if (fresh) await persistStyle(fresh);
+    protocol.add(new PMTiles(new BlobSource(cached, archiveUrl)));
+  } else if (fresh && navigator.onLine) {
+    // New deploy: its archive isn't downloaded yet. Persist the style only *after* its archive lands,
+    // and prune older archives only then — so the persisted style always has a matching archive and an
+    // interrupted download can never strand the next offline launch (the prior complete pair stays).
+    void downloadArchive(archiveUrl, key)
+      .then(() => persistStyle(fresh))
+      .then(() => pruneOldArchives(archiveUrl))
+      .catch(() => {});
+  }
+
+  return style;
+}
