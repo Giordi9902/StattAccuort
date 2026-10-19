@@ -40,11 +40,11 @@
 <table align="center">
   <tr>
     <td align="center"><img src="docs/readme_assets/screenshot1.png" alt="Mappa di Napoli con le linee e le segnalazioni attive" width="250" /></td>
-    <td align="center"><img src="docs/readme_assets/screenshot2.png" alt="Mappa del rischio per tratta a Napoli" width="250" /></td>
+    <td align="center"><img src="docs/readme_assets/screenshot2.png" alt="Scheda della stazione Toledo con i prossimi passaggi della Linea 1" width="250" /></td>
   </tr>
   <tr>
     <td align="center"><sub><strong>Linee e controlli in corso</strong></sub></td>
-    <td align="center"><sub><strong>Rischio tratta per tratta</strong></sub></td>
+    <td align="center"><sub><strong>Scheda stazione e prossimi passaggi</strong></sub></td>
   </tr>
 </table>
 
